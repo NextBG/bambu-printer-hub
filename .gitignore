@@ -1,0 +1,8 @@
+secrets.env
+printers.json
+hms_zh.json
+*.pem
+*.log
+__pycache__/
+venv/
+.venv/

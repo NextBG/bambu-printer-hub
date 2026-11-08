@@ -1,0 +1,10 @@
+{
+ "server": "wss://your.domain.com:8446/bridge",
+ "token": "same value as HUB_BRIDGE_TOKEN on the server",
+ "printers": [
+  {"id": "h2d", "name": "H2D", "model": "Bambu H2D", "ip": "192.168.1.20", "serial": "0948XXXXXXXXXXX",
+   "code": "LAN access code", "camera": "rtsps"},
+  {"id": "a1mini", "name": "A1 mini", "model": "Bambu A1 mini", "ip": "192.168.1.21", "serial": "0309XXXXXXXXXXX",
+   "code": "LAN access code", "camera": "tcp6000", "chamber": false}
+ ]
+}

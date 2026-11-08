@@ -1,0 +1,3 @@
+aiohttp>=3.9
+paho-mqtt>=2.0     # bridge only
+Pillow>=10         # bridge only (A1 / P1 camera downscale)

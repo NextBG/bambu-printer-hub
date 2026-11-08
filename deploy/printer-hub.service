@@ -1,0 +1,15 @@
+[Unit]
+Description=Printer hub web (HTTPS/WSS :8446)
+After=network-online.target
+
+[Service]
+User=USER
+WorkingDirectory=/home/USER/printer-hub
+EnvironmentFile=/home/USER/printer-hub/secrets.env
+Environment=HUB_CERT=/home/USER/printer-hub/cert.pem HUB_KEY=/home/USER/printer-hub/key.pem
+ExecStart=/usr/bin/python3 /home/USER/printer-hub/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

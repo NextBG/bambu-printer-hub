@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111"><link rel="icon" href="data:,"><title>打印机</title>
+<style>
+:root{--bg:#111;--card:#1c1c1e;--line:#333;--fg:#eee;--dim:#999;--ok:#30d158;--warn:#ffd60a;--bad:#ff453a;--acc:#0a84ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"PingFang SC",sans-serif}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:10px 14px;background:#111e;backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+header h1{font-size:17px;margin:0;flex:1}#conn{font-size:12px;color:var(--dim)}
+label.sw{font-size:13px;color:var(--dim);display:flex;gap:4px;align-items:center}
+main{display:grid;gap:14px;padding:14px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+.card{background:var(--card);border-radius:14px;overflow:hidden;border:1px solid var(--line)}
+.cam{position:relative;aspect-ratio:16/9;background:#000;cursor:zoom-in}
+.cam img{width:100%;height:100%;object-fit:contain;display:block}
+.cam .age{position:absolute;right:6px;bottom:6px;font-size:11px;background:#000a;padding:1px 6px;border-radius:6px}
+.cam .ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--dim);font-size:13px}
+.body{padding:12px 14px}.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.name{font-weight:600;font-size:17px}.model{color:var(--dim);font-size:12px}
+.badge{margin-left:auto;font-size:12px;padding:2px 8px;border-radius:10px;background:#333}
+.badge.RUNNING{background:#0a84ff33;color:#64d2ff}.badge.PAUSE{background:#ffd60a33;color:var(--warn)}
+.badge.FINISH{background:#30d15833;color:var(--ok)}.badge.FAILED,.badge.off{background:#ff453a33;color:var(--bad)}
+.task{color:var(--dim);font-size:13px;margin:6px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar{height:8px;background:#333;border-radius:4px;overflow:hidden;margin:6px 0}.bar i{display:block;height:100%;background:var(--acc);transition:width .5s}
+.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:13px;margin:8px 0}
+.kv div{background:#26262a;border-radius:8px;padding:6px 8px}.kv b{display:block;font-size:15px}.kv span{color:var(--dim);font-size:11px}
+.err{color:var(--bad);font-size:12px;margin:4px 0;line-height:1.45}.err div{margin:2px 0}.err a{color:inherit;font-weight:600;white-space:nowrap}.err .warn{color:#e9a23b}
+.ctl{display:flex;gap:8px;margin-top:10px}
+.ctl button,.ctl select{flex:1;font-size:15px;padding:10px 6px;border-radius:10px;border:0;background:#2c2c2e;color:var(--fg)}
+.ctl button:disabled,.ctl select:disabled{opacity:.35}.ctl .stop{background:#ff453a33;color:var(--bad)}
+#modal{position:fixed;inset:0;background:#000;display:none;z-index:9;align-items:center;justify-content:center}
+#modal img{max-width:100%;max-height:100%;object-fit:contain}#modal .x{position:absolute;top:10px;right:14px;font-size:30px;color:#fff;cursor:pointer;padding:8px}
+#modal .age{position:absolute;left:12px;bottom:12px;font-size:13px;background:#000a;padding:2px 8px;border-radius:6px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#333;padding:10px 16px;border-radius:10px;display:none;z-index:10}
+</style></head><body>
+<header><h1>打印机</h1><label class=sw><input type=checkbox id=vid> 卡片视频</label><span id=conn>连接中…</span></header>
+<main id=grid></main>
+<div id=modal><span class=x>×</span><img><span class=age></span></div>
+<div id=toast></div>
+<script>
+const FPS_CARD = 0.5, FPS_FULL = 2;               // frames/s while a card is on screen / fullscreen
+const ST = {RUNNING:'打印中',PAUSE:'已暂停',FINISH:'完成',FAILED:'已停止/失败',IDLE:'空闲',PREPARE:'准备中',SLICING:'切片中'};
+const SPD = {1:'静音 50%',2:'标准 100%',3:'运动 124%',4:'狂暴 166%'};
+const P = {}, cards = {}, visible = new Set();
+let ws, full = null, backoff = 1;
+const $ = (s, e = document) => e.querySelector(s);
+const vid = $('#vid'); vid.checked = localStorage.vid !== '0';
+vid.onchange = () => { localStorage.vid = vid.checked ? '1' : '0'; render(); watch(); };
+
+function toast(t, bad) { const e = $('#toast'); e.textContent = t; e.style.color = bad ? 'var(--bad)' : ''; e.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => e.style.display = 'none', 2500); }
+function ago(ts) { const s = Date.now() / 1000 - ts; return s < 60 ? `${s | 0} 秒前` : s < 3600 ? `${s / 60 | 0} 分钟前` : `${s / 3600 | 0} 小时前`; }
+function eta(m) { if (m == null) return '-'; const d = new Date(Date.now() + m * 60000);
+  return `${m >= 60 ? (m / 60 | 0) + 'h' : ''}${m % 60}m · ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; }
+function t2(a) { return a && a[0] != null ? `${a[0]}°${a[1] ? '/' + a[1] : ''}` : '-'; }
+
+function card(id) {
+  if (cards[id]) return cards[id];
+  const c = document.createElement('div'); c.className = 'card'; c.innerHTML = `
+  <div class=cam><img alt=""><div class=ph>镜头</div><span class=age></span></div>
+  <div class=body><div class=row><span class=name></span><span class=model></span><span class=badge></span></div>
+  <div class=task></div><div class=bar><i></i></div>
+  <div class=kv><div><span>进度</span><b class=pct></b></div><div><span>剩余 · 完成于</span><b class=eta></b></div><div><span>层</span><b class=layer></b></div>
+  <div><span>喷嘴</span><b class=noz></b></div><div><span>热床</span><b class=bed></b></div><div><span>仓温</span><b class=ch></b></div></div>
+  <div class=err></div>
+  <div class=ctl><button class=pause>暂停</button><button class=resume>继续</button><button class=stop>停止</button>
+  <select class=spd>${Object.entries(SPD).map(([k, v]) => `<option value=${k}>${v}</option>`).join('')}</select></div></div>`;
+  c.cam = { img: $('img', c), seq: 0, want: 0, last: 0, loading: false };
+  $('.cam', c).onclick = () => openFull(id);
+  $('.pause', c).onclick = () => cmd(id, 'pause');
+  $('.resume', c).onclick = () => cmd(id, 'resume');
+  $('.stop', c).onclick = () => confirm(`确定停止 ${P[id].name} 的打印「${P[id].state.task || ''}」？不可恢复。`) && cmd(id, 'stop');
+  $('.spd', c).onchange = e => cmd(id, 'speed', e.target.value);
+  c.dataset.id = id; io.observe(c); $('#grid').append(c);
+  return cards[id] = c;
+}
+
+function render() {
+  for (const p of Object.values(P)) {
+    const c = card(p.id), s = p.state || {}, g = p.online ? s.gcode_state || '?' : 'off';
+    $('.name', c).textContent = p.name; $('.model', c).textContent = p.model || '';
+    const b = $('.badge', c); b.className = 'badge ' + g; b.textContent = p.online ? ST[g] || g : '离线 ' + (p.ts ? ago(p.ts) : '');
+    $('.task', c).textContent = s.task || '—';
+    $('.bar i', c).style.width = (s.percent || 0) + '%';
+    $('.pct', c).textContent = s.percent != null ? s.percent + '%' : '-';
+    $('.eta', c).textContent = g === 'RUNNING' || g === 'PAUSE' ? eta(s.remain_min) : '-';
+    $('.layer', c).textContent = s.layers ? `${s.layer}/${s.layers}` : '-';
+    $('.noz', c).textContent = (s.nozzle || []).map(t2).join(' ') || '-';
+    $('.bed', c).textContent = t2(s.bed); $('.ch', c).textContent = s.chamber != null ? s.chamber + '°' : '-';
+    const slug = /h2/i.test(p.model) ? 'h2' : /a1 ?mini/i.test(p.model) ? 'a1-mini' : /a1/i.test(p.model) ? 'a1' : /p1/i.test(p.model) ? 'p1' : 'x1';
+    const esc = t => String(t).replace(/[&<>"]/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch]));
+    const lines = [];
+    if (+s.err) {
+      const e = (+s.err).toString(16).toUpperCase().padStart(8, '0');
+      lines.push(`<div><b>错误 ${e.slice(0, 4)}_${e.slice(4)}</b> ${esc(s.err_text || '')}</div>`);
+    }
+    for (const h of s.hms || []) {
+      const [code, txt] = Array.isArray(h) ? h : [h, ''];
+      if (!/^[0-9A-F_]+$/.test(code)) continue;
+      const minor = +code.split('_')[2] >= 3;   // HMS level: 1 fatal, 2 serious, 3 common, 4 info
+      lines.push(`<div${minor ? ' class=warn' : ''}><a href="https://wiki.bambulab.com/zh/${slug}/troubleshooting/hmscode/${code}" target=_blank rel=noopener>HMS ${code}</a> ${esc(txt || '点击查看说明')}</div>`);
+    }
+    $('.err', c).innerHTML = lines.join('');
+    const run = g === 'RUNNING', pau = g === 'PAUSE';
+    $('.pause', c).disabled = !run; $('.resume', c).disabled = !pau; $('.stop', c).disabled = !(run || pau);
+    const sp = $('.spd', c); sp.disabled = !(run || pau); if (document.activeElement !== sp && s.speed) sp.value = s.speed;
+    $('.ph', c).textContent = !vid.checked ? '卡片视频已关，点击看实时画面' : p.frame ? '' : '等待画面…';
+    $('.ph', c).style.display = c.cam.img.src && vid.checked ? 'none' : 'grid';
+    if (!vid.checked) c.cam.img.removeAttribute('src');
+  }
+  tickAges();
+}
+function tickAges() {
+  for (const [id, c] of Object.entries(cards)) { const f = P[id].frame; $('.age', c).textContent = f && c.cam.img.src ? ago(f.ts) : ''; }
+  if (full) { const f = P[full].frame; $('#modal .age').textContent = `${P[full].name} · ${f ? ago(f.ts) : '等待画面…'}`; }
+}
+setInterval(tickAges, 1000);
+
+// ---- camera refresh: only on-screen cards / fullscreen, only while tab visible ----
+const io = new IntersectionObserver(es => { for (const e of es) e.isIntersecting ? visible.add(e.target.dataset.id) : visible.delete(e.target.dataset.id); watch(); });
+function fpsFor(id) { if (document.hidden) return 0; if (full === id) return FPS_FULL; if (full) return 0; return vid.checked && visible.has(id) ? FPS_CARD : 0; }
+function watch() {
+  if (!ws || ws.readyState !== 1) return;
+  const ids = {}; for (const id in P) { const f = fpsFor(id); if (f) ids[id] = f; }
+  ws.send(JSON.stringify({ type: 'watch', ids }));
+}
+document.addEventListener('visibilitychange', watch);
+function pull(id) {
+  const f = fpsFor(id), c = cards[id]; if (!f || !c) return;
+  const cam = full === id ? fullCam : c.cam;
+  if (cam.loading || cam.seq >= cam.want || Date.now() - cam.last < 900 / f) { if (!cam.timer) cam.timer = setTimeout(() => { cam.timer = 0; pull(id); }, 300); return; }
+  cam.loading = true; cam.last = Date.now(); const want = cam.want;
+  const im = new Image();
+  im.onload = () => { cam.img.src = im.src; cam.seq = want; cam.loading = false; $('.ph', c).style.display = 'none'; tickAges(); if (cam.want > cam.seq) pull(id); };
+  im.onerror = () => { cam.loading = false; };
+  im.src = `snap/${encodeURIComponent(id)}?s=${want}`;
+}
+const fullCam = { img: $('#modal img'), seq: 0, want: 0, last: 0, loading: false };
+function openFull(id) { full = id; fullCam.seq = 0; fullCam.want = P[id].frame ? P[id].frame.seq : 0;
+  fullCam.img.src = cards[id].cam.img.src || ''; $('#modal').style.display = 'flex'; watch(); if (fullCam.want) pull(id); tickAges(); }
+$('#modal').onclick = () => { full = null; $('#modal').style.display = 'none'; watch(); };
+
+function cmd(id, c, arg) { ws && ws.readyState === 1 ? ws.send(JSON.stringify({ type: 'cmd', id, cmd: c, arg })) : toast('未连接', 1); }
+
+function connect() {
+  ws = new WebSocket(location.href.replace(/^http/, 'ws').replace(/[^/]*$/, '') + 'ws');
+  let opened = false;
+  ws.onopen = () => { opened = true; backoff = 1; $('#conn').textContent = '已连接'; watch(); };
+  ws.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'all') { for (const p of d.printers) P[p.id] = p; render(); watch(); }
+    else if (d.type === 'state' && P[d.id]) { Object.assign(P[d.id], { online: d.online, state: d.state, ts: d.ts }); render(); }
+    else if (d.type === 'frame' && P[d.id]) { P[d.id].frame = { seq: d.seq, ts: d.ts }; cards[d.id].cam.want = d.seq; fullCam.want = full === d.id ? d.seq : fullCam.want; pull(d.id); }
+    else if (d.type === 'ack') toast(d.ok ? '已发送' : '失败：' + d.msg, !d.ok);
+  };
+  ws.onclose = async () => {
+    $('#conn').textContent = '重连中…';
+    if (!opened) { const r = await fetch('./', { redirect: 'manual' }).catch(() => null); if (r && r.type === 'opaqueredirect') return location.href = 'login'; }
+    setTimeout(connect, backoff * 1000); backoff = Math.min(backoff * 2, 15);
+  };
+}
+connect();
+</script></body></html>
